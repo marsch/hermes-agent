@@ -20,13 +20,19 @@ skip='/(site-packages|dist-packages|node_modules|\.venv/lib|usr/share|usr/lib|\.
 # 1. files that hold secrets
 while read -r f; do say "secret file: ${f#$t/fs}"; done < <(find "$t/fs" -type f \( -name '.env' -o -name '*.env' -o -name 'id_rsa*' -o -name 'id_ed25519*' -o -name '*.pem' -o -name '*.key' -o -name 'credentials*' -o -name 'setup.json' -o -name '.dmx' \) 2>/dev/null | grep -Ev "$skip" || true)
 # 2. secret-looking values in our files
-pat='(op://[A-Za-z0-9_-]+/|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|dmx-world=|\.unity\.bot|\.dmnet\b)'
-while read -r f; do say "secret-looking value in ${f#$t/fs}"; done < <(grep -rIlE "$pat" "$t/fs" 2>/dev/null | grep -Ev "$skip" || true)
+pat='(op://(daemon|daemon-dev)/|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40,}|sk-[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|dmx-world=|\.unity\.bot|\.dmnet\b)'
+# upstream docs and examples carry placeholders (ghp_xxxx…, sk-xxxx…) and slugs (sk-some-skill-name):
+# not secrets. 1Password references count only for dmx's own vaults.
+placeholder='(x{8,}|X{8,}|^sk-[a-z]+(-[a-z]+)+$|<[^>]*>)'
+while read -r f; do say "secret-looking value in ${f#$t/fs}"; done < <(
+  grep -rIoHE "$pat" "$t/fs" 2>/dev/null | grep -Ev "$skip" | while IFS= read -r hit; do
+    v="${hit#*:}"; grep -qE "$placeholder" <<<"$v" || echo "${hit%%:*}"
+  done | sort -u)
 # 3. the image config: ENV and labels
 docker inspect "$img" --format '{{range .Config.Env}}{{println .}}{{end}}{{range $k,$v := .Config.Labels}}{{$k}}={{$v}}{{println}}{{end}}' >"$t/config"
 if grep -iE '(token|secret|password|api_key|apikey)=.+' "$t/config" | grep -vE '=(|none|false|0)$' >"$t/bad" 2>/dev/null && [ -s "$t/bad" ]; then
   while read -r l; do say "secret-looking config: ${l%%=*}=…"; done <"$t/bad"
 fi
-grep -E "$pat" "$t/config" >/dev/null && say "secret-looking value in the image config"
+grep -oE "$pat" "$t/config" | grep -vE "$placeholder" >/dev/null && say "secret-looking value in the image config"
 [ "$found" = 0 ] && echo "scan-image: $img is clean"
 exit "$found"
