@@ -1,0 +1,76 @@
+# dmx (github.com/marsch/dmx, P25-04): the pinned Hermes image for dmx Twins, built once per pin on
+# native runners (amd64 and arm64 — no emulation), scanned for secrets before any push, pushed to
+# ghcr.io/marsch/hermes-agent (public: only this fork's code, no World configuration — that comes
+# at run time through the dmx twin Role), and joined into one index whose digest the Role pins.
+name: dmx image
+
+on:
+  push:
+    branches: ["dmx/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/marsch/hermes-agent
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-24.04}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    outputs:
+      amd64: ${{ steps.push.outputs.amd64 }}
+      arm64: ${{ steps.push.outputs.arm64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: The scanner proves itself first (an image with a planted secret must fail)
+        run: |
+          printf 'FROM debian:13.4\nRUN mkdir -p /opt/data && echo "OPENAI_API_KEY=sk-planted0123456789abcdefgh" >/opt/data/.env\n' >/tmp/Dockerfile.planted
+          docker build -q -f /tmp/Dockerfile.planted -t dmx-planted /tmp >/dev/null
+          if .github/dmx/scan-image.sh dmx-planted; then echo "the scanner missed a planted secret"; exit 1; fi
+          echo "scanner red on the planted image, as it must be"
+      - name: Build
+        run: |
+          docker build \
+            --label org.opencontainers.image.source=https://github.com/${{ github.repository }} \
+            --label org.opencontainers.image.revision=${{ github.sha }} \
+            --label org.opencontainers.image.description="Hermes Agent for dmx Twins (fork ${{ github.repository }} at ${{ github.sha }})" \
+            --build-arg HERMES_GIT_SHA=${{ github.sha }} \
+            -t local/hermes:${{ matrix.arch }} .
+      - name: Nothing secret in the image
+        run: .github/dmx/scan-image.sh local/hermes:${{ matrix.arch }}
+      - name: Push (by digest)
+        id: push
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          tag="$IMAGE:pin-${GITHUB_SHA::7}-${{ matrix.arch }}"
+          docker tag local/hermes:${{ matrix.arch }} "$tag"
+          docker push "$tag"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$tag")"
+          echo "${{ matrix.arch }}=$digest" >>"$GITHUB_OUTPUT"
+          echo "${{ matrix.arch }}: $digest" >>"$GITHUB_STEP_SUMMARY"
+
+  index:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: One index for both architectures
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          tag="$IMAGE:pin-${GITHUB_SHA::7}"
+          docker buildx imagetools create -t "$tag" "${{ needs.build.outputs.amd64 }}" "${{ needs.build.outputs.arm64 }}"
+          digest="$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          {
+            echo "### dmx pin"
+            echo "twin_image_ref: \"${{ github.sha }}\""
+            echo "twin_image_digest: \"$digest\""
+            echo "($tag)"
+          } >>"$GITHUB_STEP_SUMMARY"
