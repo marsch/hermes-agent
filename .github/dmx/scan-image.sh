@@ -16,7 +16,7 @@ done
 found=0
 say() { echo "scan-image: $*"; found=1; }
 # third-party trees carry test fixtures (keys, fake tokens) of their own — not ours
-skip='/(site-packages|dist-packages|node_modules|\.venv/lib|usr/share|usr/lib|\.playwright|\.cache)/'
+skip='/(site-packages|dist-packages|node_modules|\.venv/lib|usr/share|usr/lib|\.playwright|\.cache|cache/uv/archive-v[0-9]+|tools/ffmpeg-[^/]+/doc)/'
 # 1. files that hold secrets
 while read -r f; do say "secret file: ${f#$t/fs}"; done < <(find "$t/fs" -type f \( -name '.env' -o -name '*.env' -o -name 'id_rsa*' -o -name 'id_ed25519*' -o -name '*.pem' -o -name '*.key' -o -name 'credentials*' -o -name 'setup.json' -o -name '.dmx' \) 2>/dev/null | grep -Ev "$skip" || true)
 # 2. secret-looking values in our files
