@@ -37,6 +37,16 @@ jobs:
           docker build -q -f /tmp/Dockerfile.planted -t dmx-planted /tmp >/dev/null
           if .github/dmx/scan-image.sh dmx-planted; then echo "the scanner missed a planted secret"; exit 1; fi
           echo "scanner red on the planted image, as it must be"
+      - name: Write install stamp
+        # Upstream's docker.yml stamps every image (hermes_cli/version_info.py reads
+        # /opt/hermes/install-stamp.json first); without it a Twin reports "unknown" and the
+        # desktop app cannot compare versions. The fork's base release is pinned here.
+        run: |
+          python3 scripts/write_install_stamp.py --output install-stamp.json \
+            --distribution docker --update-mechanism external --source ci \
+            --commit "$GITHUB_SHA" --base-version "${DMX_HERMES_BASE:-0.21.6}" \
+            --display-version "${DMX_HERMES_BASE:-0.21.6}" --distance 0
+          cat install-stamp.json
       - name: Build
         run: |
           docker build \
